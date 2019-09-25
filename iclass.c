@@ -1502,6 +1502,8 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 			cipher_state.r = cipher_state_KD.r;
 			cipher_state.t = cipher_state_KD.t;
 
+			cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);			
+
 			modulated_response = resp_cc;
 			modulated_response_size = resp_cc_len; //order = 4;
 			trace_data = card_challenge_data;
@@ -1514,6 +1516,8 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 			cipher_state.l = cipher_state_KC.l;
 			cipher_state.r = cipher_state_KC.r;
 			cipher_state.t = cipher_state_KC.t;
+
+			cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
 
 			// if(check_count > 100){
 			// 	Dbprintf("cipher_state: l:%02x r:%02x b:%02x t:%02x", cipher_state.l, cipher_state.r, cipher_state.b, cipher_state.t);
@@ -1658,9 +1662,6 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 				memcpy(data_generic_trace, emulator+((8*1) + (current_page*(maxBlk+1) * 8)),8);
 				memcpy(diversified_key_d, emulator+((8*3) + (current_page*(maxBlk+1) * 8)),8);
 				memcpy(diversified_key_c, emulator+((8*4) + (current_page*(maxBlk+1) * 8)),8);				
-
-				cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);
-				cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
 
 				AppendCrc(data_generic_trace, 8);
 
