@@ -1212,11 +1212,13 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 	// free eventually allocated BigBuf memory
 	BigBuf_free_keep_EM();
 
-	State cipher_state;
+	State *p_cipher_state;
 	//MOLSER
 	State cipher_state_KD;
 	State cipher_state_KC;
 	uint8_t maxBlk = 31;
+	uint8_t check_count = 0;
+	uint8_t current_page = 0;	
 
 //  State cipher_state_reserve;
 	uint8_t *csn = BigBuf_get_EM_addr();
@@ -1236,11 +1238,13 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 	ComputeCrc14443(CRC_ICLASS, anticoll_data, 8, &anticoll_data[8], &anticoll_data[9]);
 	ComputeCrc14443(CRC_ICLASS, csn_data, 8, &csn_data[8], &csn_data[9]);
 
-	uint8_t diversified_key[8] = { 0 };
+	//uint8_t diversified_key[8] = { 0 };	
 	uint8_t diversified_key_d[8] = { 0 };
 	uint8_t diversified_key_c[8] = { 0 };
+	uint8_t *p_diversified_key = diversified_key_d;
 	// e-Purse
 	uint8_t card_challenge_data[8] = { 0x00 };
+	
 	//bool isTagMultyApp = false;
 
 	int exitLoop = 0;
@@ -1299,34 +1303,29 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 		//The diversified key should be stored on block 3
 		//Get the diversified key from emulator memory
 		//memcpy(diversified_key, emulator + (8*3), 8);
-		memcpy(diversified_key_d, emulator+(8*3),8);
-		memcpy(diversified_key_c, emulator+(8*4),8);
+		memcpy(diversified_key_d, emulator + (8*3),8);
+		memcpy(diversified_key_c, emulator + (8*4),8);
 		//Card challenge, a.k.a e-purse is on block 2
 		memcpy(conf_data, emulator + (8 * 1), 8);
 		memcpy(card_challenge_data, emulator + (8 * 2), 8);
 
 		//Precalculate the cipher state, feeding it the CC
 		//cipher_state = opt_doTagMAC_1(card_challenge_data, diversified_key);
-
-		//isTagMultyApp = !(*(emulator+(8*1+4)) & 0x10);
-		// mem = resp[5];
-		// memory.k16 = (mem & 0x80);
-		// memory.book = (mem & 0x20);
-		// memory.k2 = (mem & 0x8);
-		// memory.lockauth = (mem & 0x2);
-		// memory.keyaccess = (mem & 0x1);
-
 	}
-	cipher_state = opt_doTagMAC_1(card_challenge_data, diversified_key);
+
+	if(((conf_data[5] & 0x80) >> 7) == 1){
+		maxBlk = 255;
+	}
+
 	cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);
 	cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
+	p_cipher_state = &cipher_state_KD;
 
-	// Dbprintf("conf_data[5]: %x", conf_data[5]);
-	// if(((conf_data[5] & 0x80) >> 7) == 1){
-	// 	maxBlk = 255;
-	// }
-	// Dbprintf("conf_data[5] & 0x80 >> 7: %d", (conf_data[5] & 0x80) >> 7);
-	// Dbprintf("maxBlk: %d", maxBlk);
+	//From PicoPass DS:
+	//When the page is in personalization mode this bit is equal to 1.
+	//Once the application issuer has personalized and coded its dedicated areas, this bit must be set to 0: the
+	//page is " in application mode".
+	uint8_t is_page_personalisationed = (conf_data[7] & 0x80) >> 7;
 
 	// Prepare card messages
 	ToSendMax = 0;
@@ -1398,9 +1397,6 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 	LED_A_ON();
 	bool buttonPressed = false;
 	uint16_t response_delay = 1;
-	//MOLSER
-	uint8_t check_count = 0;
-	uint8_t current_page = 0;
 
 	// for(uint16_t i = 0; i < 2048; i+=8){
 	// 	Dbprintf(" (%d)  %02x %02x %02x %02x %02x %02x %02x %02x ", i/8, emulator[i+0],emulator[i+1],emulator[i+2],emulator[i+3]
@@ -1433,7 +1429,7 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 				// if(check_count == 3){
 				// 	check_count = 0;
 					//NR, from reader, is in receivedCmd +1
-					opt_doTagMAC_2(cipher_state, receivedCmd+1, data_generic_trace, diversified_key);
+					opt_doTagMAC_2(p_cipher_state, receivedCmd+1, data_generic_trace, p_diversified_key);
 
 					trace_data = data_generic_trace;
 					trace_data_size = 4;
@@ -1496,13 +1492,17 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 		} else if (receivedCmd[0] == ICLASS_CMD_READCHECK_KD) {
 			check_count = 0;
 			// Read e-purse (88 02)
-			memcpy(diversified_key, diversified_key_d,8);
-			cipher_state.b = cipher_state_KD.b;
-			cipher_state.l = cipher_state_KD.l;
-			cipher_state.r = cipher_state_KD.r;
-			cipher_state.t = cipher_state_KD.t;
+			//memcpy(diversified_key, diversified_key_d,8);
+						
+			// cipher_state.b = cipher_state_KD.b;
+			// cipher_state.l = cipher_state_KD.l;
+			// cipher_state.r = cipher_state_KD.r;
+			// cipher_state.t = cipher_state_KD.t;
 
-			cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);			
+			//cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);
+			opt_editTagMAC_1(&cipher_state_KD,card_challenge_data, diversified_key_d);
+			p_diversified_key = diversified_key_d;
+			p_cipher_state = &cipher_state_KD;			
 
 			modulated_response = resp_cc;
 			modulated_response_size = resp_cc_len; //order = 4;
@@ -1511,13 +1511,16 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 			LED_B_ON();
 		} else if (receivedCmd[0] == ICLASS_CMD_READCHECK_KC) { // 0x18
 			check_count++;
-			memcpy(diversified_key, diversified_key_c,8);
-			cipher_state.b = cipher_state_KC.b;
-			cipher_state.l = cipher_state_KC.l;
-			cipher_state.r = cipher_state_KC.r;
-			cipher_state.t = cipher_state_KC.t;
+			//memcpy(diversified_key, diversified_key_c,8);
+			// cipher_state.b = cipher_state_KC.b;
+			// cipher_state.l = cipher_state_KC.l;
+			// cipher_state.r = cipher_state_KC.r;
+			// cipher_state.t = cipher_state_KC.t;
 
-			cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
+			//cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
+			opt_editTagMAC_1(&cipher_state_KC,card_challenge_data, diversified_key_c);
+			p_diversified_key = diversified_key_c;
+			p_cipher_state = &cipher_state_KC;
 
 			// if(check_count > 100){
 			// 	Dbprintf("cipher_state: l:%02x r:%02x b:%02x t:%02x", cipher_state.l, cipher_state.r, cipher_state.b, cipher_state.t);
@@ -1623,20 +1626,28 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 				memcpy(card_challenge_data, receivedCmd+2, 8);
 				opt_CodeIClassTagAnswer(card_challenge_data, sizeof(card_challenge_data));
 				memcpy(resp_cc, ToSend, ToSendMax); resp_cc_len = ToSendMax;
-				cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);
-				cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
+				//cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);
+				//cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
 			} else if(receivedCmd[1] == 3){
 				for(int i=0; i<8; i++){
-					diversified_key_d[i] = diversified_key_d[i] ^ receivedCmd[2 + i];							
+					if(is_page_personalisationed){
+						diversified_key_d[i] = receivedCmd[2 + i];	
+					} else {
+						diversified_key_d[i] ^= receivedCmd[2 + i];
+					}						
 				}
 				memcpy(emulator+(8*3) + ((current_page*(maxBlk+1) * 8)), diversified_key_d, 8);
-				cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);				
+				//cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);				
 			} else if(receivedCmd[1] == 4){					
 				for(int i=0; i<8; i++){
-					diversified_key_c[i] = diversified_key_c[i] ^ receivedCmd[2 + i];					
+					if(is_page_personalisationed){
+						diversified_key_c[i] = receivedCmd[2 + i];	
+					} else {
+						diversified_key_c[i] ^= receivedCmd[2 + i];
+					}					
 				}
 				memcpy(emulator+(8*4) + ((current_page*(maxBlk+1) * 8)),diversified_key_c, 8);								
-				cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
+				//cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
 			}
 
 			//Take the data...
@@ -1660,8 +1671,9 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 				current_page = receivedCmd[1];
 				
 				memcpy(data_generic_trace, emulator+((8*1) + (current_page*(maxBlk+1) * 8)),8);
+				is_page_personalisationed = (data_generic_trace[7] & 0x80) >> 7;
 				memcpy(diversified_key_d, emulator+((8*3) + (current_page*(maxBlk+1) * 8)),8);
-				memcpy(diversified_key_c, emulator+((8*4) + (current_page*(maxBlk+1) * 8)),8);				
+				memcpy(diversified_key_c, emulator+((8*4) + (current_page*(maxBlk+1) * 8)),8);												
 
 				AppendCrc(data_generic_trace, 8);
 
