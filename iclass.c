@@ -1217,8 +1217,6 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 	State cipher_state_KD;
 	State cipher_state_KC;
 	uint8_t maxBlk = 31;
-	uint8_t app_areas = 1;
-	uint8_t kb = 2;
 
 //  State cipher_state_reserve;
 	uint8_t *csn = BigBuf_get_EM_addr();
@@ -1279,14 +1277,14 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 	//uint8_t conf_data[10] = {0x12,0xFF,0xFF,0xFF,0x7F,0x1F,0xFF,0x3C,0x00,0x00};
 	//MOLSER 
 	uint8_t conf_data[10] = {0x12,0xFF,0xFF,0xFF,0xF9,0x9F,0xFF,0x3C,0x00,0x00};
-	AddCrc(conf_data, 8);
+	AppendCrc(conf_data, 8);
 	
 
 	// Application Issuer Area 
 	uint8_t *resp_aia = BigBuf_malloc(28);
 	int resp_aia_len;
 	uint8_t aia_data[10] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00};
-	AddCrc(aia_data, 8);
+	AppendCrc(aia_data, 8);
 
 
 	// e-Purse
@@ -1323,8 +1321,12 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 	cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);
 	cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
 
-	getMemConfig(conf_data[13], conf_data[12], &maxBlk, &app_areas, &kb);
-
+	// Dbprintf("conf_data[5]: %x", conf_data[5]);
+	// if(((conf_data[5] & 0x80) >> 7) == 1){
+	// 	maxBlk = 255;
+	// }
+	// Dbprintf("conf_data[5] & 0x80 >> 7: %d", (conf_data[5] & 0x80) >> 7);
+	// Dbprintf("maxBlk: %d", maxBlk);
 
 	// Prepare card messages
 	ToSendMax = 0;
@@ -1390,7 +1392,7 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 	uint32_t t2r_time =0;
 	uint32_t r2t_time =0;
 
-	Dbprintf("Ver.8");
+	Dbprintf("Ver.10");
 	//Dbprintf("isTagMultyApp: %d",(int)isTagMultyApp);
 
 	LED_A_ON();
@@ -1399,6 +1401,11 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 	//MOLSER
 	uint8_t check_count = 0;
 	uint8_t current_page = 0;
+
+	// for(uint16_t i = 0; i < 2048; i+=8){
+	// 	Dbprintf(" (%d)  %02x %02x %02x %02x %02x %02x %02x %02x ", i/8, emulator[i+0],emulator[i+1],emulator[i+2],emulator[i+3]
+	// 														,emulator[i+4],emulator[i+5],emulator[i+6],emulator[i+7]);				
+	// }
 	
 	while (!exitLoop) {
 		response_delay = 1;		
@@ -1523,8 +1530,6 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 			trace_data = card_challenge_data;
 			trace_data_size = sizeof(card_challenge_data);
 			LED_B_ON();		
-		//} else if (receivedCmd[0] == ICLASS_CMD_CHECK) {
-		
 		} else if (receivedCmd[0] == ICLASS_CMD_HALT && len == 1) {
 			// Reader ends the session
 			modulated_response = resp_sof;
@@ -1537,7 +1542,7 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 				//Read block
 				uint16_t blk = receivedCmd[1];
 				//Take the data...
-				memcpy(data_generic_trace, emulator + (blk << 3) + (current_page*(maxBlk+1)), 8);
+				memcpy(data_generic_trace, emulator + (blk << 3) + (current_page*(maxBlk+1) * 8), 8);
 				//Add crc
 				AppendCrc(data_generic_trace, 8);
 				trace_data = data_generic_trace;
@@ -1584,7 +1589,7 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 			//Read block
 			uint16_t blk = receivedCmd[1];
 			//Take the data...
-			memcpy(data4_generic_trace, emulator + (blk << 3), (8*4));
+			memcpy(data4_generic_trace, emulator + (blk << 3)+ (current_page*(maxBlk+1) * 8), (8*4));
 			//Add crc
 			AppendCrc(data4_generic_trace, (8*4));
 			trace_data = data4_generic_trace;
@@ -1599,7 +1604,17 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 			//We're expected to respond with the data+crc, exactly what's already in the receivedcmd
 			//receivedcmd is now UPDATE 1b | ADDRESS 1b| DATA 8b| Signature 4b or CRC 2b|
 			
-			
+			//Sherhann
+
+			// 0th byte - command;
+			// 1st byte - block;
+			// 2-9 - data to be recorded;
+			// 10-13 - MAC reader
+			// The reader is waiting for a response:
+			// 0-7 - data that is recorded + 2 CRC.
+			// When the reader updates the keys, it does not transmit the pure diversified key as data, but the xored one with the previous key.
+
+
 			if(receivedCmd[1] == 2){
 				memcpy(card_challenge_data, receivedCmd+2, 8);
 				opt_CodeIClassTagAnswer(card_challenge_data, sizeof(card_challenge_data));
@@ -1610,13 +1625,13 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 				for(int i=0; i<8; i++){
 					diversified_key_d[i] = diversified_key_d[i] ^ receivedCmd[2 + i];							
 				}
-				memcpy(emulator+(8*3) + (current_page*(maxBlk+1)), diversified_key_d, 8);
+				memcpy(emulator+(8*3) + ((current_page*(maxBlk+1) * 8)), diversified_key_d, 8);
 				cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);				
 			} else if(receivedCmd[1] == 4){					
 				for(int i=0; i<8; i++){
 					diversified_key_c[i] = diversified_key_c[i] ^ receivedCmd[2 + i];					
 				}
-				memcpy(emulator+(8*4) + (current_page*(maxBlk+1)),diversified_key_c, 8);								
+				memcpy(emulator+(8*4) + ((current_page*(maxBlk+1) * 8)),diversified_key_c, 8);								
 				cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
 			}
 
@@ -1640,9 +1655,9 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf, int delay_fo
 			//if(isTagMultyApp){
 				current_page = receivedCmd[1];
 				
-				memcpy(data_generic_trace, emulator+(8*1) + (current_page*(maxBlk+1)),8);
-				memcpy(diversified_key_d, emulator+(8*3) + (current_page*(maxBlk+1)),8);
-				memcpy(diversified_key_c, emulator+(8*4) + (current_page*(maxBlk+1)),8);				
+				memcpy(data_generic_trace, emulator+((8*1) + (current_page*(maxBlk+1) * 8)),8);
+				memcpy(diversified_key_d, emulator+((8*3) + (current_page*(maxBlk+1) * 8)),8);
+				memcpy(diversified_key_c, emulator+((8*4) + (current_page*(maxBlk+1) * 8)),8);				
 
 				cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);
 				cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
