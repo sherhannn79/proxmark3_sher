@@ -293,9 +293,9 @@ State opt_doTagMAC_1(uint8_t *cc_p, const uint8_t *div_key_p) {
  * @param mac - where to store the MAC
  * @param div_key_p - the key to use
  */
-void opt_doTagMAC_2(State *_init, uint8_t *nr, uint8_t mac[4], const uint8_t *div_key_p) {
-	opt_suc(div_key_p, _init, nr, 4, true);
-	opt_output(div_key_p, _init, mac);
+void opt_doTagMAC_2(State _init, uint8_t *nr, uint8_t mac[4], const uint8_t *div_key_p) {
+	opt_suc(div_key_p, &_init, nr, 4, true);
+	opt_output(div_key_p, &_init, mac);
 	return;
 }
 void opt_editTagMAC_1(State *s, uint8_t *cc_p, const uint8_t *div_key_p) {

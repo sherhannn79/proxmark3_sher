@@ -84,6 +84,6 @@ State opt_doTagMAC_1(uint8_t *cc_p, const uint8_t *div_key_p);
  * @param div_key_p - the key to use
  */
 
-void opt_doTagMAC_2(State *_init, uint8_t *nr, uint8_t mac[4], const uint8_t *div_key_p);
+void opt_doTagMAC_2(State _init, uint8_t *nr, uint8_t mac[4], const uint8_t *div_key_p);
 void opt_editTagMAC_1(State *s, uint8_t *cc_p, const uint8_t *div_key_p);
 #endif // OPTIMIZED_CIPHER_H__

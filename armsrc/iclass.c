@@ -783,11 +783,12 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf) {
 	// free eventually allocated BigBuf memory
 	BigBuf_free_keep_EM();
 
-	State *p_cipher_state;
+	State cipher_state;
 	State cipher_state_KC;
 	State cipher_state_KD;
 	uint8_t maxBlk = 31;
 	uint8_t current_page = 0;
+	bool cipher_changed = false;
 
 	uint8_t *emulator = BigBuf_get_EM_addr();
 	uint8_t *csn = emulator;
@@ -830,9 +831,13 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf) {
 		memcpy(reader_mac_buf, card_challenge_data, 8);
 	}
 
+	if(((conf_data[5] & 0x80) >> 7) == 1){
+		maxBlk = 255;
+	}
+
 	cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);
 	cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
-	p_cipher_state = &cipher_state_KD;
+	cipher_state = cipher_state_KD;
 
 	//From PicoPass DS:
 	//When the page is in personalization mode this bit is equal to 1.
@@ -962,7 +967,33 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf) {
 		trace_data = NULL;
 		trace_data_size = 0;
 
-		if (receivedCmd[0] == ICLASS_CMD_ACTALL && len == 1) {
+		if ((receivedCmd[0] == ICLASS_CMD_CHECK_KC 
+					|| receivedCmd[0] == ICLASS_CMD_CHECK_KD) && len == 9) {
+			// Reader random and reader MAC!!!
+			if (chip_state == SELECTED) {
+				if (simulationMode == ICLASS_SIM_MODE_FULL) {
+					//NR, from reader, is in receivedCmd+1
+					opt_doTagMAC_2(cipher_state, receivedCmd+1, data_generic_trace, p_diversified_key);
+					
+					trace_data = data_generic_trace;
+					trace_data_size = 4;
+					CodeIso15693AsTag(trace_data, trace_data_size);
+					memcpy(data_response, ToSend, ToSendMax);
+					modulated_response = data_response;
+					modulated_response_size = ToSendMax;
+					//exitLoop = true;
+				} else { // Not fullsim, we don't respond
+					// We do not know what to answer, so lets keep quiet
+					if (simulationMode == ICLASS_SIM_MODE_EXIT_AFTER_MAC) {
+						if (reader_mac_buf != NULL) {
+							// save NR and MAC for sim 2,4
+							memcpy(reader_mac_buf + 8, receivedCmd + 1, 8);
+						}
+						exitLoop = true;
+					}
+				}
+			}
+		} else	if (receivedCmd[0] == ICLASS_CMD_ACTALL && len == 1) {
 			// Reader in anticollision phase
 			if (chip_state != HALTED) {
 				modulated_response = resp_sof;
@@ -1073,14 +1104,22 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf) {
 			// Read e-purse (88 02 || 18 02)
 			if (chip_state == SELECTED) {
 				if(receivedCmd[0] == ICLASS_CMD_READCHECK_KD){
-					opt_editTagMAC_1(&cipher_state_KD,card_challenge_data, diversified_key_d);
+					if(cipher_changed){
+						//opt_editTagMAC_1(&cipher_state_KD,card_challenge_data, diversified_key_d);
+						cipher_state_KD = opt_doTagMAC_1(card_challenge_data, diversified_key_d);
+						cipher_changed = false;
+					}			
+					cipher_state = cipher_state_KD;
 					p_diversified_key = diversified_key_d;
-					p_cipher_state = &cipher_state_KD;
 				}
 				else{
-					opt_editTagMAC_1(&cipher_state_KC,card_challenge_data, diversified_key_c);
+					if(cipher_changed){
+						//opt_editTagMAC_1(cipher_state_KC,card_challenge_data, diversified_key_c);
+						cipher_state_KC = opt_doTagMAC_1(card_challenge_data, diversified_key_c);
+						cipher_changed = false;
+					}
+					cipher_state = cipher_state_KC;			
 					p_diversified_key = diversified_key_c;
-					p_cipher_state = &cipher_state_KC;
 				}
 				
 				modulated_response = resp_cc;
@@ -1089,33 +1128,6 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf) {
 				trace_data_size = sizeof(card_challenge_data);
 				LED_B_ON();
 			}
-
-		} else if ((receivedCmd[0] == ICLASS_CMD_CHECK_KC 
-					|| receivedCmd[0] == ICLASS_CMD_CHECK_KD) && len == 9) {
-			// Reader random and reader MAC!!!
-			if (chip_state == SELECTED) {
-				if (simulationMode == ICLASS_SIM_MODE_FULL) {
-					//NR, from reader, is in receivedCmd+1
-					opt_doTagMAC_2(p_cipher_state, receivedCmd+1, data_generic_trace, p_diversified_key);
-					trace_data = data_generic_trace;
-					trace_data_size = 4;
-					CodeIso15693AsTag(trace_data, trace_data_size);
-					memcpy(data_response, ToSend, ToSendMax);
-					modulated_response = data_response;
-					modulated_response_size = ToSendMax;
-					//exitLoop = true;
-				} else { // Not fullsim, we don't respond
-					// We do not know what to answer, so lets keep quiet
-					if (simulationMode == ICLASS_SIM_MODE_EXIT_AFTER_MAC) {
-						if (reader_mac_buf != NULL) {
-							// save NR and MAC for sim 2,4
-							memcpy(reader_mac_buf + 8, receivedCmd + 1, 8);
-						}
-						exitLoop = true;
-					}
-				}
-			}
-
 		} else if (receivedCmd[0] == ICLASS_CMD_HALT && len == 1) {
 			if (chip_state == SELECTED) {
 				// Reader ends the session
@@ -1139,22 +1151,23 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf) {
 			// We're expected to respond with the data+crc, exactly what's already in the receivedCmd
 			// receivedCmd is now UPDATE 1b | ADDRESS 1b | DATA 8b | Signature 4b or CRC 2b
 			if (chip_state == SELECTED) {
-				uint8_t blockNo = receivedCmd[1];
-				if (blockNo == 2) { // update e-purse
-					memcpy(card_challenge_data, receivedCmd+2, 8);
-					CodeIso15693AsTag(card_challenge_data, sizeof(card_challenge_data));
-					memcpy(resp_cc, ToSend, ToSendMax);
-					resp_cc_len = ToSendMax;
-				} else if (blockNo == 3) { // update Kd
-					for (int i = 0; i < 8; i++){	
+				//uint8_t blockNo = receivedCmd[1];
+				// if (blockNo == 2) { // update e-purse
+				// 	memcpy(card_challenge_data, receivedCmd+2, 8);
+				// 	CodeIso15693AsTag(card_challenge_data, sizeof(card_challenge_data));
+				// 	memcpy(resp_cc, ToSend, ToSendMax);
+				// 	resp_cc_len = ToSendMax;
+				if(receivedCmd[1] == 3){
+					for(int i=0; i<8; i++){
 						if(is_page_personalisationed){
 							diversified_key_d[i] = receivedCmd[2 + i];	
 						} else {
 							diversified_key_d[i] ^= receivedCmd[2 + i];
-						}
+						}						
 					}
 					memcpy(emulator+(8*3) + ((current_page*(maxBlk+1) * 8)), diversified_key_d, 8);
-				} else if (blockNo == 4) { // update Kc
+					cipher_changed = true;			
+				} else if(receivedCmd[1] == 4){					
 					for(int i=0; i<8; i++){
 						if(is_page_personalisationed){
 							diversified_key_c[i] = receivedCmd[2 + i];	
@@ -1162,8 +1175,9 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf) {
 							diversified_key_c[i] ^= receivedCmd[2 + i];
 						}					
 					}
-					memcpy(emulator+(8*4) + ((current_page*(maxBlk+1) * 8)),diversified_key_c, 8);
-				} 					
+					memcpy(emulator+(8*4) + ((current_page*(maxBlk+1) * 8)),diversified_key_c, 8);								
+					cipher_changed = true;
+				}				
 				memcpy(data_generic_trace, receivedCmd + 2, 8);
 				AppendCrc(data_generic_trace, 8);
 				trace_data = data_generic_trace;
@@ -1182,12 +1196,12 @@ int doIClassSimulation(int simulationMode, uint8_t *reader_mac_buf) {
 				// It appears we're fine ignoring this.
 				// Otherwise, we should answer 8bytes (block) + 2bytes CRC
 				current_page = receivedCmd[1];
-				
-				memcpy(data_generic_trace, emulator+((8*1) + (current_page*(maxBlk+1) * 8)),8);
-				is_page_personalisationed = (data_generic_trace[7] & 0x80) >> 7;
 				memcpy(diversified_key_d, emulator+((8*3) + (current_page*(maxBlk+1) * 8)),8);
 				memcpy(diversified_key_c, emulator+((8*4) + (current_page*(maxBlk+1) * 8)),8);												
-
+				cipher_changed = true;
+				memcpy(data_generic_trace, emulator+((8*1) + (current_page*(maxBlk+1) * 8)),8);
+				is_page_personalisationed = (data_generic_trace[7] & 0x80) >> 7;
+				
 				AppendCrc(data_generic_trace, 8);
 
 				trace_data = data_generic_trace;
